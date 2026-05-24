@@ -1,16 +1,10 @@
 import crypto from 'crypto';
-import { parseString } from 'xml2js';
-import { addSession, getStats, getRecent, deleteSession } from '../../lib/db';
-import { parseMessage } from '../../lib/parser';
-import { toXmlReply, helpText, statsText, recentText, addedText, deletedText } from '../../lib/reply';
 
 export const config = {
   api: {
     bodyParser: false,
   },
 };
-
-const TOKEN = process.env.WECHAT_TOKEN;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -21,37 +15,46 @@ function readBody(req) {
   });
 }
 
-function parseXml(xml) {
-  return new Promise((resolve, reject) => {
-    parseString(xml, { explicitArray: false }, (err, result) => {
-      if (err) reject(err);
-      else resolve(result.xml);
-    });
-  });
-}
-
 export default async function handler(req, res) {
+  // GET: 微信服务器验证 — 极轻量，只用了内置 crypto，秒回
   if (req.method === 'GET') {
     const { signature, timestamp, nonce, echostr } = req.query;
-    const arr = [TOKEN, timestamp, nonce].sort();
+    const token = process.env.WECHAT_TOKEN;
+
+    const arr = [token, timestamp, nonce].sort();
     const hash = crypto.createHash('sha1').update(arr.join('')).digest('hex');
+
     if (hash === signature) {
-      res.status(200).send(echostr);
+      res.status(200).setHeader('Content-Type', 'text/plain').send(echostr);
     } else {
-      res.status(403).send('Forbidden');
+      res.status(200).send('signature mismatch');
     }
     return;
   }
 
   if (req.method !== 'POST') {
-    res.status(405).send('Method Not Allowed');
+    res.status(405).end();
     return;
   }
+
+  // POST: 消息处理 — 动态导入，只在实际收消息时才加载
+  const [{ parseString }, { addSession, getStats, getRecent, deleteSession }, { parseMessage }, { toXmlReply, helpText, statsText, recentText, addedText, deletedText }] =
+    await Promise.all([
+      import('xml2js'),
+      import('../../lib/db.js'),
+      import('../../lib/parser.js'),
+      import('../../lib/reply.js'),
+    ]);
 
   let parsed;
   try {
     const body = await readBody(req);
-    parsed = await parseXml(body);
+    parsed = await new Promise((resolve, reject) => {
+      parseString(body, { explicitArray: false }, (err, result) => {
+        if (err) reject(err);
+        else resolve(result.xml);
+      });
+    });
   } catch (e) {
     res.status(400).send('Bad Request');
     return;
